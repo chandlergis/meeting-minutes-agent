@@ -10,6 +10,48 @@ log = logging.getLogger(__name__)
 # 注意: 日志的基本配置 (handler, formatter, level) 应该在程序入口 (app.py 或 main 脚本) 进行统一设置。
 # 这里只是获取 logger 实例。
 
+def seconds_to_srt_time(seconds: float) -> str:
+    """将浮点秒数转换为 SRT 时间格式"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+def generate_transcript_with_timestamps(words: list, max_duration: int = 7, max_chars: int = 30) -> dict:
+    """生成带时间戳的转录内容"""
+    segments = []
+    current_text = ""
+    start_time = None
+    subtitle_index = 1
+
+    for i, word_info in enumerate(words):
+        if start_time is None:
+            start_time = word_info["start"]
+        
+        current_text += word_info["word"]
+        end_time = word_info["end"]
+
+        should_split = (
+            (end_time - start_time > max_duration) or
+            (len(current_text) > max_chars) or
+            (i == len(words) - 1)
+        )
+
+        if should_split:
+            segments.append({
+                "index": subtitle_index,
+                "start_time": seconds_to_srt_time(start_time),
+                "end_time": seconds_to_srt_time(end_time),
+                "text": current_text.strip()
+            })
+            
+            subtitle_index += 1
+            current_text = ""
+            start_time = None if i == len(words) - 1 else words[i + 1]["start"]
+
+    return segments
+
 class SimpleAudioTranscriber:
     """
     使用 Groq API 将单个音频文件转录为文本。
@@ -70,14 +112,17 @@ class SimpleAudioTranscriber:
                     timestamp_granularities=["word"]
                 )
                 
-                # 将 Transcription 对象转换为字典
+                # 生成带时间戳的转录段落
+                segments = generate_transcript_with_timestamps(transcription.words)
+                
+                # 返回完整的转录结果
                 return {
                     'text': transcription.text,
                     'task': transcription.task,
                     'language': transcription.language,
                     'duration': transcription.duration,
                     'words': transcription.words,
-                    'segments': transcription.segments,
+                    'segments': segments,  # 添加分段信息
                     'x_groq': transcription.x_groq
                 }
 

@@ -31,6 +31,13 @@ class TestAudioTranscriber(unittest.TestCase):
             print("\nTranscribed Text:")
             print(result.get('text', 'No text found'))
             
+            if 'segments' in result:
+                print("\nSegments with Timestamps (first 3):")
+                for segment in result['segments'][:3]:
+                    print(f"\nSegment {segment['index']}:")
+                    print(f"Time: {segment['start_time']} --> {segment['end_time']}")
+                    print(f"Text: {segment['text']}")
+            
             if 'words' in result:
                 print("\nWord Timestamps (first 5 words):")
                 for word_info in result['words'][:5]:

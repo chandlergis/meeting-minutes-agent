@@ -1,0 +1,6 @@
+groq:
+  api_key: "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"  # 替换为你的 API key
+  model: "whisper-large-v3-turbo"
+  language: "zhs"
+  temperature: 0.15
+  prompt: "该音频为简体中文"
