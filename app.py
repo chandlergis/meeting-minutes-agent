@@ -33,6 +33,11 @@ def init_services():
         st.error(f"服务初始化失败: {str(e)}")
         return None, None, None, None
 
+def convert_to_wav(src_path, dst_path):
+    subprocess.run([
+        "ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", dst_path
+    ], check=True)
+
 def save_uploaded_file(uploaded_file, directory: str) -> str:
     """保存上传的文件并返回保存路径"""
     if not os.path.exists(directory):
@@ -40,6 +45,11 @@ def save_uploaded_file(uploaded_file, directory: str) -> str:
     file_path = os.path.join(directory, uploaded_file.name)
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
+    # 如果是mp3，自动转码为wav
+    if file_path.lower().endswith('.mp3'):
+        wav_path = file_path.rsplit('.', 1)[0] + '.wav'
+        convert_to_wav(file_path, wav_path)
+        return wav_path
     return file_path
 
 def main():
