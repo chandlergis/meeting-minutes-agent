@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, List
 import logging
+import subprocess
 
 # First Streamlit command must be set_page_config
 st.set_page_config(
