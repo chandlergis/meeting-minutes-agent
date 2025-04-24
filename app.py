@@ -154,7 +154,7 @@ def main():
                     result = doc_parser.parse_document(file_path)
                     if not result.get("error"):
                         meeting_file.append(result["text_content"])
-                
+
                 # 处理音频
                 meeting_audio = []
                 for audio in uploaded_audios:
@@ -165,7 +165,7 @@ def main():
                         return
                     for idx, wav_path in enumerate(wav_paths):
                         result = audio_transcriber.transcribe_audio(wav_path)
-                    if isinstance(result, dict) and "text" in result:
+                        if isinstance(result, dict) and "text" in result:
                             meeting_audio.append(f"[音频片段{idx+1}]:\n{result['text']}")
                         else:
                             meeting_audio.append(f"[音频片段{idx+1}]:\n(转录失败)")
