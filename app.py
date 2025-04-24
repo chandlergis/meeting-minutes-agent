@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 import logging
 import subprocess
+from pydub import AudioSegment
 
 # First Streamlit command must be set_page_config
 st.set_page_config(
@@ -38,18 +39,46 @@ def convert_to_wav(src_path, dst_path):
         "ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", dst_path
     ], check=True)
 
-def save_uploaded_file(uploaded_file, directory: str) -> str:
-    """保存上传的文件并返回保存路径"""
+def split_wav_to_chunks(wav_path, max_size_mb=35, max_chunk_minutes=9):
+    """将wav按时长分割成多个小于max_size_mb的文件，优先按时长分段"""
+    audio = AudioSegment.from_wav(wav_path)
+    chunk_length_ms = max_chunk_minutes * 60 * 1000  # 9分钟一段
+    chunks = []
+    for i, start in enumerate(range(0, len(audio), chunk_length_ms)):
+        chunk = audio[start:start+chunk_length_ms]
+        chunk_path = wav_path.rsplit('.', 1)[0] + f"_part{i+1}.wav"
+        chunk.export(chunk_path, format="wav")
+        # 再次确保分段后每段都小于max_size_mb
+        if os.path.getsize(chunk_path) > max_size_mb * 1024 * 1024:
+            raise ValueError(f"音频分段后单段仍超过{max_size_mb}MB，请上传更短音频")
+        chunks.append(chunk_path)
+    return chunks
+
+def save_uploaded_file(uploaded_file, directory: str) -> list:
+    """保存上传的文件并返回wav路径列表（如需分段则返回多个）"""
     if not os.path.exists(directory):
         os.makedirs(directory)
     file_path = os.path.join(directory, uploaded_file.name)
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    # 如果是mp3，自动转码为wav
-    if file_path.lower().endswith('.mp3'):
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in ['.mp3', '.m4a', '.ogg']:
         wav_path = file_path.rsplit('.', 1)[0] + '.wav'
         convert_to_wav(file_path, wav_path)
-        return wav_path
+    elif ext == '.wav':
+        wav_path = file_path
+    else:
+        raise ValueError("不支持的音频格式")
+    # 无论多大都分段，保证每段都小于API限制
+    return split_wav_to_chunks(wav_path, max_size_mb=35, max_chunk_minutes=9)
+
+def save_uploaded_document(uploaded_file, directory: str) -> str:
+    """保存上传的文档文件并返回保存路径"""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    file_path = os.path.join(directory, uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
     return file_path
 
 def main():
@@ -121,7 +150,7 @@ def main():
                 # 处理文档
                 meeting_file = []
                 for doc in uploaded_docs:
-                    file_path = save_uploaded_file(doc, str(temp_dir))
+                    file_path = save_uploaded_document(doc, str(temp_dir))  # 用文档保存函数
                     result = doc_parser.parse_document(file_path)
                     if not result.get("error"):
                         meeting_file.append(result["text_content"])
@@ -129,29 +158,94 @@ def main():
                 # 处理音频
                 meeting_audio = []
                 for audio in uploaded_audios:
-                    file_path = save_uploaded_file(audio, str(temp_dir))
-                    result = audio_transcriber.transcribe_audio(file_path)
+                    try:
+                        wav_paths = save_uploaded_file(audio, str(temp_dir))  # 只对音频用
+                    except ValueError as e:
+                        st.error(str(e))
+                        return
+                    for idx, wav_path in enumerate(wav_paths):
+                        result = audio_transcriber.transcribe_audio(wav_path)
                     if isinstance(result, dict) and "text" in result:
-                        meeting_audio.append(result["text"])
+                            meeting_audio.append(f"[音频片段{idx+1}]:\n{result['text']}")
+                        else:
+                            meeting_audio.append(f"[音频片段{idx+1}]:\n(转录失败)")
 
             # 生成会议纪要prompt
             prompt = f"""
-请根据以下信息生成一份专业的会议纪要：
+## Context:
+本次任务的目标是根据提供的多种来源（会议备注、相关文档、音频转录）的原始信息，自动化生成一份结构清晰、内容准确、格式标准的正式会议纪要。
+这份纪要将用于官方记录、信息同步和任务跟进。
 
-会议备注：
-{meeting_content if meeting_content else '无'}
+## Role:
+你是一位专业的 AI 会议纪要助手，擅长从非结构化文本中提取关键信息，并将其组织成专业、规范的会议纪要文档。
 
-文档内容：
-{' '.join(meeting_file) if meeting_file else '无'}
+## Input Data:
+你将接收到以下格式的文本信息：
 
-音频转录：
-{' '.join(meeting_audio) if meeting_audio else '无'}
+--- BEGIN INPUT ---
 
-请生成一份结构化的会议纪要，包含：
-1. 会议主要议题
-2. 重要决策和结论
-3. 待办事项和负责人
-4. 后续跟进计划
+**# 会议备注:**
+{meeting_content if meeting_content else '无内容'}
+
+**# 文档内容:**
+{' '.join(meeting_file) if meeting_file else '无内容'}
+
+**# 音频转录:**
+{' '.join(meeting_audio) if meeting_audio else '无内容'}
+## INSTRUCTIONS (PROCESSING STEPS):
+
+请按照以下步骤分析和处理上述输入数据：
+1.  提取基本信息 (Extraction): 识别并整合会议的基础要素：会议名称/主题、时间、地点、主持人、参会人员名单。
+2.  归纳议题与讨论 (Summarization & Analysis): 识别会议讨论的核心议题。对每个议题，总结关键讨论点、主要观点（包括共识与分歧）以及最终结论或状态。
+3.  整理会议决定 (Decision Collation): 筛选并清晰记录所有达成的明确决策。
+4.  梳理行动计划 (Action Item Identification): 提取所有分配的具体任务，明确负责人、截止日期（若有）和关键要求。
+## GOAL (OUTPUT REQUIREMENTS):
+你的最终输出必须是一份符合以下格式和约束条件的会议纪要：
+
+1. 输出格式 (Strict Template):
+请严格遵循以下纯文本模板，不要添加任何 Markdown 标记或其他格式符号。
+
+--- BEGIN OUTPUT TEMPLATE ---
+
+[会议名称]会议纪要
+
+一、会议基本信息
+    时间：[提取或推断的会议日期和时间]
+    地点：[提取的会议地点]
+    主持人：[提取的主持人姓名及部门]
+    参会人员：[提取的参会人员姓名及部门列表，用逗号分隔]
+
+二、主要议题及讨论内容
+    （一）[议题1标题]
+        讨论概要：[简述议题1的关键讨论点、主要观点、共识与分歧]
+        议题结论：[明确议题1的结论或当前状态]
+
+    （二）[议题2标题]
+        讨论概要：[简述议题2的关键讨论点、主要观点、共识与分歧]
+        议题结论：[明确议题2的结论或当前状态]
+
+    [...] <根据实际议题数量调整>
+
+三、会议决定
+    1. [决定1：清晰、可执行的描述]
+    2. [决定2：清晰、可执行的描述]
+    [...] <根据实际决定数量调整，如无则写“无”>
+
+四、任务计划（行动项）
+    1. [任务1描述]
+        备注：[可选，补充信息]
+    2. [任务2描述]
+        备注：[可选，补充信息]
+    [...] <根据实际任务数量调整，如无则写“无”>
+--- END OUTPUT TEMPLATE ---
+
+2. 内容与风格约束 (Content & Style Constraints):
+*   准确性: 内容必须基于提供的输入信息，忠实反映会议情况。
+*   信息缺失处理: 若输入信息不足以填充模板中的某个字段（如具体时间、负责人），请使用 `[待明确]` 作为占位符。不得臆测信息。
+*   专业性: 使用客观、中立、正式的商业书面语言。
+*   简洁性: 在保证信息完整的前提下，力求语言精练。
+*   格式纯净: 严格输出纯文本，无任何额外格式符号。
+
 """
 
             with st.spinner("正在生成会议纪要..."):
