@@ -1,0 +1,8 @@
+docker build -t meeting-minutes-agent .
+
+docker run -d \
+  --name meeting-minutes \
+  -p 8502:8502 \
+  -v ${PWD}/temp:/app/temp \
+  -e XAI_API_KEY=Ix1YQkDPUvaZwCG3TpJ179DiejOM8cq2 \
+  meeting-minutes-agent

@@ -1,0 +1,13 @@
+groq:
+  api_key: "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"
+  model: "whisper-large-v3-turbo"
+  language: "zhs"
+  temperature: 0.15
+  prompt: "该音频为简体中文"
+
+xai:
+  api_key: "Ix1YQkDPUvaZwCG3TpJ179DiejOM8cq2"
+  model: "rsv-c6x82efj"
+  temperature: 0.7
+  max_tokens: 3000
+  system_content: "你是一个专业的会议记录助手。你需要帮助整理和总结会议内容，突出重点，并保持严谨专业的语气。"

@@ -42,14 +42,9 @@ class LLMService:
         if not self.api_key:
             raise ValueError("API key must be provided either in config or through XAI_API_KEY environment variable")
         
-        self.model = xai_config.get('model', "grok-3-mini-high-beta")
-        self.base_url = "https://api.x.ai/v1"
-        
-        # 从配置文件加载其他参数
-        self.default_temperature = xai_config.get('temperature', 0.7)
-        self.default_max_tokens = xai_config.get('max_tokens', 1000)
-        self.default_reasoning_effort = xai_config.get('reasoning_effort', "high")
-        self.system_content = xai_config.get('system_content', "You are a helpful assistant.")
+        # 修改为新的 API 配置
+        self.model = xai_config.get('model', "rsv-c6x82efj")
+        self.base_url = "http://25.214.170.46:80/xlm-gateway-gwfjet/sfm-api-gateway/gateway/compatible-mode/v1"
         
         # API调用的默认头信息
         self.headers = {
@@ -78,12 +73,11 @@ class LLMService:
             ChatResponse对象，包含生成的文本和原始响应
         """
         try:
+            # 简化请求参数，适配新的 API
             payload = {
-                "messages": [msg.__dict__ for msg in messages],
                 "model": self.model,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "reasoning_effort": reasoning_effort
+                "messages": [msg.__dict__ for msg in messages],
+                "stream": False
             }
             
             response = requests.post(
@@ -95,7 +89,7 @@ class LLMService:
             response.raise_for_status()
             result = response.json()
             
-            # 提取生成的文本
+            # 适配新的返回格式
             assistant_message = result["choices"][0]["message"]["content"]
             
             return ChatResponse(
