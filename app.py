@@ -14,7 +14,6 @@ st.set_page_config(
 )
 
 from core.pdf_parser import DocumentParser
-from core.audio_transcriber import SimpleAudioTranscriber
 from core.llm import LLMService, Message
 from utils.config_loader import load_config
 
@@ -27,12 +26,20 @@ def init_services():
     try:
         config = load_config()
         doc_parser = DocumentParser()
-        audio_transcriber = SimpleAudioTranscriber(config)
         llm_service = LLMService(config)
-        return config, doc_parser, audio_transcriber, llm_service
+        return config, doc_parser, llm_service
     except Exception as e:
         st.error(f"服务初始化失败: {str(e)}")
-        return None, None, None, None
+        return None, None, None
+
+def save_uploaded_document(uploaded_file, directory: str) -> str:
+    """保存上传的文档文件并返回保存路径"""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    file_path = os.path.join(directory, uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return file_path
 
 def convert_to_wav(src_path, dst_path):
     subprocess.run([
@@ -72,15 +79,6 @@ def save_uploaded_file(uploaded_file, directory: str) -> list:
     # 无论多大都分段，保证每段都小于API限制
     return split_wav_to_chunks(wav_path, max_size_mb=35, max_chunk_minutes=9)
 
-def save_uploaded_document(uploaded_file, directory: str) -> str:
-    """保存上传的文档文件并返回保存路径"""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    file_path = os.path.join(directory, uploaded_file.name)
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return file_path
-
 def main():
     # Create left-right layout
     left_col, right_col = st.columns([1, 1])
@@ -89,8 +87,8 @@ def main():
         st.title("📝 会议纪要生成器")
         
         # 初始化服务
-        config, doc_parser, audio_transcriber, llm_service = init_services()
-        if not all([config, doc_parser, audio_transcriber, llm_service]):
+        config, doc_parser, llm_service = init_services()
+        if not all([config, doc_parser, llm_service]):
             return
 
         # 创建临时文件夹
@@ -103,21 +101,18 @@ def main():
 
         # 文档上传区
         st.header("📁 上传文档")
-        st.info("支持上传最多10个文档，每个最大50MB")
+        st.info("支持上传最多15个文档，每个最大50MB")
+        
+        # 展平支持的格式列表并创建唯一集合
+        supported_formats = []
+        for formats in doc_parser.SUPPORTED_FORMATS.values():
+            supported_formats.extend(formats)
+        supported_formats = list(set(supported_formats))
+        
         uploaded_docs = st.file_uploader(
             "选择文档文件",
             accept_multiple_files=True,
-            type=list(set([ext[1:] for exts in doc_parser.SUPPORTED_FORMATS.values() 
-                          for ext in exts if ext not in ['.mp3', '.wav', '.m4a', '.ogg']]))
-        )
-
-        # 音频上传区
-        st.header("🎵 上传音频")
-        st.info("支持上传最多5个音频文件，每个最大40MB")
-        uploaded_audios = st.file_uploader(
-            "选择音频文件",
-            accept_multiple_files=True,
-            type=['mp3', 'wav', 'm4a', 'ogg']
+            type=supported_formats
         )
 
     with right_col:
@@ -125,55 +120,33 @@ def main():
         
         # 处理按钮
         if st.button("生成会议纪要", use_container_width=True):
-            if not uploaded_docs and not uploaded_audios and not meeting_content:
-                st.warning("请至少提供一种会议内容（文档、音频或备注）")
+            if not uploaded_docs and not meeting_content:
+                st.warning("请至少提供一种会议内容（文档或备注）")
                 return
 
             # 验证文件数量和大小
-            if len(uploaded_docs) > 10:
-                st.error("文档数量超过限制（最多10个）")
-                return
-            if len(uploaded_audios) > 5:
-                st.error("音频文件数量超过限制（最多5个）")
+            if len(uploaded_docs) > 15:
+                st.error("文档数量超过限制（最多15个）")
                 return
             
             for doc in uploaded_docs:
                 if doc.size > 50 * 1024 * 1024:  # 50MB
                     st.error(f"文档 {doc.name} 超过大小限制（50MB）")
                     return
-            for audio in uploaded_audios:
-                if audio.size > 40 * 1024 * 1024:  # 40MB
-                    st.error(f"音频文件 {audio.name} 超过大小限制（40MB）")
-                    return
 
             with st.spinner("正在处理文件..."):
                 # 处理文档
                 meeting_file = []
                 for doc in uploaded_docs:
-                    file_path = save_uploaded_document(doc, str(temp_dir))  # 用文档保存函数
+                    file_path = save_uploaded_document(doc, str(temp_dir))
                     result = doc_parser.parse_document(file_path)
                     if not result.get("error"):
                         meeting_file.append(result["text_content"])
 
-                # 处理音频
-                meeting_audio = []
-                for audio in uploaded_audios:
-                    try:
-                        wav_paths = save_uploaded_file(audio, str(temp_dir))  # 只对音频用
-                    except ValueError as e:
-                        st.error(str(e))
-                        return
-                    for idx, wav_path in enumerate(wav_paths):
-                        result = audio_transcriber.transcribe_audio(wav_path)
-                        if isinstance(result, dict) and "text" in result:
-                            meeting_audio.append(f"[音频片段{idx+1}]:\n{result['text']}")
-                        else:
-                            meeting_audio.append(f"[音频片段{idx+1}]:\n(转录失败)")
-
             # 生成会议纪要prompt
             prompt = f"""
 ## Context:
-本次任务的目标是根据提供的多种来源（会议备注、相关文档、音频转录）的原始信息，自动化生成一份结构清晰、内容准确、格式标准的正式会议纪要。
+本次任务的目标是根据提供的多种来源（会议备注、相关文档）的原始信息，自动化生成一份结构清晰、内容准确、格式标准的正式会议纪要。
 这份纪要将用于官方记录、信息同步和任务跟进。
 
 ## Role:
@@ -190,8 +163,6 @@ def main():
 **# 文档内容:**
 {' '.join(meeting_file) if meeting_file else '无内容'}
 
-**# 音频转录:**
-{' '.join(meeting_audio) if meeting_audio else '无内容'}
 ## INSTRUCTIONS (PROCESSING STEPS):
 
 请按照以下步骤分析和处理上述输入数据：
@@ -233,9 +204,7 @@ def main():
 
 四、任务计划（行动项）
     1. [任务1描述]
-        备注：[可选，补充信息]
     2. [任务2描述]
-        备注：[可选，补充信息]
     [...] <根据实际任务数量调整，如无则写“无”>
 --- END OUTPUT TEMPLATE ---
 
